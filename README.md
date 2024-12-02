@@ -1,6 +1,6 @@
 # AT Protocol OAuth2 Go Example
 
-This is an example implementation of AT Protocol OAuth2 for Bluesky, written in Go. It demonstrates how to implement an OAuth2 server for the AT Protocol.
+This is a example project showing how to implement an Golang web service which uses atproto OAuth for authentication.
 
 [python-oauth-web-app](https://github.com/bluesky-social/cookbook/tree/main/python-oauth-web-app) is used as a reference for the implementation.
 
