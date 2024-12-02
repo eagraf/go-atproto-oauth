@@ -4,6 +4,11 @@ This is a example project showing how to implement an Golang web service which u
 
 [python-oauth-web-app](https://github.com/bluesky-social/cookbook/tree/main/python-oauth-web-app) is used as a reference for the implementation.
 
+Docs: 
+[https://atproto.com/ja/specs/oauth](ATProto OAuth Docs)
+[https://docs.bsky.app/blog/oauth-atproto](OAuth for AT Protocol)
+
+
 ## Prerequisites
 
 - Go 1.22 or later
