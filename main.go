@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 
@@ -15,6 +18,14 @@ import (
 	"github.com/potproject/atproto-oauth2-go-example/resolve"
 )
 
+type ActiveAuthRequest struct {
+	AuthServerIss       string `json:"authserver_iss"`
+	PKCEVerifier        string `json:"pkce_verifier"`
+	DPoPPrivateJWK      string `json:"dpop_private_jwk"`
+	DPoPAuthServerNonce string `json:"dpop_authserver_nonce"`
+	State               string `json:"state"`
+}
+
 func main() {
 	// dotenv
 	err := godotenv.Load()
@@ -22,9 +33,12 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
+	protocol := os.Getenv("PROTOCOL")
 	host := os.Getenv("HOST")
 	port := os.Getenv("PORT")
 	secretJWK := os.Getenv("SECRET_JWK")
+
+	authRequests := make(map[string]ActiveAuthRequest)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -56,46 +70,58 @@ func main() {
 		// Resolve handle -> did
 		did, err := resolve.Handle(handle)
 		if err != nil {
-			http.Error(w, "Not Found", http.StatusNotFound)
+			http.Error(w, fmt.Sprintf("Not Found: %s", err), http.StatusNotFound)
 			return
 		}
 
 		// Resolve did -> pds
 		pds, err := resolve.PDS(did)
 		if err != nil {
-			http.Error(w, "Not Found", http.StatusNotFound)
+			http.Error(w, fmt.Sprintf("Not Found: %s", err), http.StatusNotFound)
 			return
 		}
 
 		// Resolve PDS Auth server
 		authServer, err := resolve.PDSAuthServer(pds)
 		if err != nil {
-			http.Error(w, "Not Found", http.StatusNotFound)
+			http.Error(w, fmt.Sprintf("Not Found: %s", err), http.StatusNotFound)
 			return
 		}
+		fmt.Println("AUTH SERVER")
+		fmt.Println(authServer)
 
 		// resolve PAR(Pushed Authorization Requests) server
 		parServer, err := resolve.PARServer(authServer)
 		if err != nil {
-			http.Error(w, "Not Found", http.StatusNotFound)
+			http.Error(w, fmt.Sprintf("Not Found: %s", err), http.StatusNotFound)
 			return
 		}
 
 		// get Client Metadata
-		clientMetadata := getClientMetadata(host)
+		clientMetadata := getClientMetadata(protocol, host, port)
+
+		dpopPrivateJWK := key.GenerateSecretJWK()
 
 		// PAR request
-		requestUri, err := par.Par(parServer, authServer, secretJWK, clientMetadata.ClientID, clientMetadata.RedirectURIs[0])
+		requestUri, codeVerifier, state, dpopNonce, err := par.Par(parServer, authServer, secretJWK, clientMetadata.ClientID, clientMetadata.RedirectURIs[0], dpopPrivateJWK)
 		if err != nil {
 			fmt.Println(err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("Internal Server Error: %s", err), http.StatusInternalServerError)
 			return
 		}
+		authRequests[state] = ActiveAuthRequest{
+			AuthServerIss:       authServer,
+			PKCEVerifier:        codeVerifier,
+			DPoPPrivateJWK:      dpopPrivateJWK,
+			DPoPAuthServerNonce: dpopNonce,
+			State:               state,
+		}
+		fmt.Printf("State: %s\n", state)
 
 		// Redirect to auth server
 		authServerEndpoint, err := getAuthServerAuthEndpoint(authServer)
 		if err != nil {
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("Internal Server Error: %s", err), http.StatusInternalServerError)
 			return
 		}
 		data := url.Values{}
@@ -110,11 +136,31 @@ func main() {
 		iss := r.URL.Query().Get("iss")
 		code := r.URL.Query().Get("code")
 		state := r.URL.Query().Get("state")
+
+		authRequest, ok := authRequests[state]
+		if !ok {
+			http.Error(w, fmt.Sprintf("Not Found: %s", state), http.StatusNotFound)
+			return
+		}
+
+		delete(authRequests, state)
+
+		clientMetadata := getClientMetadata(protocol, host, port)
+		clientID := clientMetadata.ClientID
+
+		tokenBody, nonce, err := initialTokenRequest(authRequest, code, protocol+"://"+host, clientID, secretJWK)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Internal Server Error: %s", err), http.StatusInternalServerError)
+			return
+		}
+
 		w.Write([]byte("<html><body>"))
 		w.Write([]byte("<h1>Callback</h1>"))
 		w.Write([]byte("<p>iss: " + iss + "</p>"))
 		w.Write([]byte("<p>code: " + code + "</p>"))
 		w.Write([]byte("<p>state: " + state + "</p>"))
+		w.Write([]byte("<p>token: " + fmt.Sprintf("%+v", tokenBody) + "</p>"))
+		w.Write([]byte("<p>nonce: " + nonce + "</p>"))
 		w.Write([]byte("</body></html>"))
 	})
 
@@ -132,7 +178,7 @@ func main() {
 
 	http.HandleFunc("/client_metadata.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		clientMetadata := getClientMetadata(host)
+		clientMetadata := getClientMetadata(protocol, host, port)
 		clientMetadataJSON, err := json.Marshal(clientMetadata)
 		if err != nil {
 			http.Error(w, "Not Found", http.StatusNotFound)
@@ -167,20 +213,20 @@ type ClientMetadata struct {
 	PolicyURI  string `json:"policy_uri,omitempty"`  // optional
 }
 
-func getClientMetadata(host string) ClientMetadata {
+func getClientMetadata(protocol string, host string, port string) ClientMetadata {
 	return ClientMetadata{
 		ClientName:                  "Demo Client",
-		ClientURI:                   "https://" + host,
-		ClientID:                    "https://" + host + "/client_metadata.json",
+		ClientURI:                   protocol + "://" + host,
+		ClientID:                    protocol + "://" + host + "/client_metadata.json", // TODO handle localhost for development mode
 		ApplicationType:             "web",
 		GrantTypes:                  []string{"authorization_code", "refresh_token"},
 		Scope:                       "atproto transition:generic",
 		ResponseTypes:               []string{"code"},
-		RedirectURIs:                []string{"https://" + host + "/callback"},
+		RedirectURIs:                []string{protocol + "://" + host + "/callback"},
 		DPopBoundAccessTokens:       true,
 		TokenEndpointAuthMethod:     "private_key_jwt",
 		TokenEndpointAuthSigningAlg: "ES256",
-		JwksUri:                     "https://" + host + "/jwks.json",
+		JwksUri:                     protocol + "://" + host + "/jwks.json",
 	}
 }
 
@@ -203,4 +249,96 @@ func getAuthServerAuthEndpoint(server string) (string, error) {
 	}
 
 	return endpoint, nil
+}
+
+func initialTokenRequest(authRequest ActiveAuthRequest, code, appURL, clientID string, clientSecretJWK string) (map[string]interface{}, string, error) {
+	authServerURL := authRequest.AuthServerIss
+
+	// Construct auth token request fields
+	redirectURI := fmt.Sprintf("%s/callback", appURL)
+
+	clientAssertion, err := par.SignJWT(clientSecretJWK, authServerURL, clientID)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create client assertion JWT: %w", err)
+	}
+
+	params := map[string]string{
+		"client_id":             clientID,
+		"redirect_uri":          redirectURI,
+		"grant_type":            "authorization_code",
+		"code":                  code,
+		"code_verifier":         authRequest.PKCEVerifier,
+		"client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+		"client_assertion":      clientAssertion,
+	}
+
+	tokenURL, err := resolve.TokenEndpoint(authServerURL)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to fetch token endpoint: %w", err)
+	}
+	if !isSafeURL(tokenURL) {
+		return nil, "", fmt.Errorf("unsafe token URL: %s", tokenURL)
+	}
+
+	dpopProof, err := par.CreateDPoPProof("POST", tokenURL, authRequest.DPoPAuthServerNonce, authRequest.DPoPPrivateJWK)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create DPoP proof: %w", err)
+	}
+
+	client := &http.Client{}
+	reqBody, _ := json.Marshal(params)
+
+	req, err := http.NewRequest("POST", tokenURL, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("DPoP", dpopProof)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	var respBody map[string]interface{}
+	err = json.Unmarshal(bodyBytes, &respBody)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to unmarshal response body: %w", err)
+	}
+
+	if resp.StatusCode == 400 {
+
+		if respBody["error"] == "use_dpop_nonce" {
+			newNonce := resp.Header.Get("DPoP-Nonce")
+			fmt.Printf("retrying with new auth server DPoP nonce: %s\n", newNonce)
+
+			dpopProof, err = par.CreateDPoPProof("POST", tokenURL, newNonce, authRequest.DPoPPrivateJWK)
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to create new DPoP proof: %w", err)
+			}
+
+			req.Header.Set("DPoP", dpopProof)
+			resp, err = client.Do(req)
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to retry request: %w", err)
+			}
+			defer resp.Body.Close()
+		}
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, "", fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	return respBody, authRequest.DPoPAuthServerNonce, nil
+}
+
+func isSafeURL(url string) bool {
+	return strings.HasPrefix(url, "https://")
 }
