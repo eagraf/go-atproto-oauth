@@ -91,9 +91,15 @@ func main() {
 		fmt.Println(authServer)
 
 		// resolve PAR(Pushed Authorization Requests) server
-		parServer, err := resolve.PARServer(authServer)
+		authServerMeta, err := resolve.FetchAuthServerMeta(authServer)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Not Found: %s", err), http.StatusNotFound)
+			http.Error(w, fmt.Sprintf("Error fetching auth server metadata: %s", err), http.StatusInternalServerError)
+			return
+		}
+
+		parServer, ok := authServerMeta["pushed_authorization_request_endpoint"].(string)
+		if !ok {
+			http.Error(w, fmt.Sprintf("Error getting PAR endpoint: %s", err), http.StatusInternalServerError)
 			return
 		}
 
@@ -119,11 +125,13 @@ func main() {
 		fmt.Printf("State: %s\n", state)
 
 		// Redirect to auth server
-		authServerEndpoint, err := getAuthServerAuthEndpoint(authServer)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Internal Server Error: %s", err), http.StatusInternalServerError)
+
+		authServerEndpoint, ok := authServerMeta["authorization_endpoint"].(string)
+		if !ok {
+			http.Error(w, fmt.Sprintf("Error getting auth server endpoint: %s", err), http.StatusInternalServerError)
 			return
 		}
+
 		data := url.Values{}
 		data.Set("client_id", clientMetadata.ClientID)
 		data.Set("request_uri", requestUri)
@@ -230,27 +238,6 @@ func getClientMetadata(protocol string, host string, port string) ClientMetadata
 	}
 }
 
-func getAuthServerAuthEndpoint(server string) (string, error) {
-	resp, err := http.Get(server + "/.well-known/oauth-authorization-server")
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	var serverMetadata map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&serverMetadata)
-	if err != nil {
-		return "", err
-	}
-
-	endpoint, ok := serverMetadata["authorization_endpoint"].(string)
-	if !ok {
-		return "", fmt.Errorf("failed to parse authorization_endpoint")
-	}
-
-	return endpoint, nil
-}
-
 func initialTokenRequest(authRequest ActiveAuthRequest, code, appURL, clientID string, clientSecretJWK string) (map[string]interface{}, string, error) {
 	authServerURL := authRequest.AuthServerIss
 
@@ -272,7 +259,16 @@ func initialTokenRequest(authRequest ActiveAuthRequest, code, appURL, clientID s
 		"client_assertion":      clientAssertion,
 	}
 
-	tokenURL, err := resolve.TokenEndpoint(authServerURL)
+	authServerMeta, err := resolve.FetchAuthServerMeta(authServerURL)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to fetch auth server metadata: %w", err)
+	}
+
+	tokenURL, ok := authServerMeta["token_endpoint"].(string)
+	if !ok {
+		return nil, "", fmt.Errorf("failed to get token endpoint")
+	}
+
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to fetch token endpoint: %w", err)
 	}

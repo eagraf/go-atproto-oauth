@@ -139,21 +139,24 @@ func PDSAuthServer(url string) (string, error) {
 	return authServer, nil
 }
 
-func PARServer(endpoint string) (string, error) {
+// fetchAuthServerMeta does an HTTP GET for Authorization Server (entryway) metadata, verify the contents, and return the metadata as a dict
+func FetchAuthServerMeta(url string) (map[string]interface{}, error) {
+	// TODO assert URL is safe
+	// TODO use a hardened HTTP client
+
 	path := "/.well-known/oauth-authorization-server"
-	resp, err := http.Get(endpoint + path)
+	resp, err := http.Get(url + path)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", err
+		return nil, err
 	}
-	parServer, ok := result["pushed_authorization_request_endpoint"].(string)
-	if !ok {
-		return "", fmt.Errorf("invalid or missing pushed_authorization_request_endpoint in PAR server metadata")
-	}
-	return parServer, nil
+
+	// TODO do some validation on the metadata
+
+	return result, nil
 }

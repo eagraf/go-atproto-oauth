@@ -13,13 +13,12 @@ import (
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
-	"github.com/potproject/atproto-oauth2-go-example/key"
 )
 
 func generateToken() string {
 	rand.NewSource(time.Now().UnixNano())
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, 32)
+	b := make([]byte, 48)
 	for i := range b {
 		b[i] = charset[rand.Intn(len(charset))]
 	}
@@ -61,7 +60,7 @@ type DPoPClaims struct {
 	Nonce string `json:"nonce"`
 }
 
-func signJWT(privateJWK string, authServer string, clientID string) (string, error) {
+func SignJWT(privateJWK string, authServer string, clientID string) (string, error) {
 	// Parse the private key JWK
 	var jwk jose.JSONWebKey
 	err := json.Unmarshal([]byte(privateJWK), &jwk)
@@ -112,7 +111,7 @@ func signJWT(privateJWK string, authServer string, clientID string) (string, err
 	return token, nil
 }
 
-func createDPoPProof(method string, url string, nonce string, privateJWK string) (string, error) {
+func CreateDPoPProof(method string, url string, nonce string, privateJWK string) (string, error) {
 	var jwk jose.JSONWebKey
 	err := json.Unmarshal([]byte(privateJWK), &jwk)
 	if err != nil {
@@ -210,7 +209,7 @@ func parRequest(endpoint string, state string, codeChallenge string, clientAsser
 	result := make(map[string]interface{})
 	err = json.Unmarshal(body, &result)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to parse response: %v", err)
+		return nil, "", fmt.Errorf("failed to parse response: %v, %s", err, string(body))
 	}
 
 	responseError, ok := result["error"].(string)
@@ -230,49 +229,46 @@ func parRequest(endpoint string, state string, codeChallenge string, clientAsser
 	return result, "", nil
 }
 
-func Par(parServer string, authServer string, privateJWK string, clientID string, redirectUrl string) (string, error) {
+func Par(parServer string, authServer string, privateJWK string, clientID string, redirectUrl string, dpopPrivateJWK string) (string, string, string, string, error) {
 	state := generateToken()
 	codeVerifier := codeVerifier()
 	codeChallenge := codeChallenge(codeVerifier)
 
 	// Sign JWT for client authentication
-	clientAssertion, err := signJWT(privateJWK, authServer, clientID)
+	clientAssertion, err := SignJWT(privateJWK, authServer, clientID)
 	if err != nil {
-		return "", fmt.Errorf("failed to create client assertion: %v", err)
+		return "", "", "", "", fmt.Errorf("failed to create client assertion: %v", err)
 	}
 
-	// DPoP Proof
-	dpopPrivateJWK := key.GenerateSecretJWK()
-
 	// Create DPoP proof
-	dpopProof, err := createDPoPProof("POST", parServer, "", dpopPrivateJWK)
+	dpopProof, err := CreateDPoPProof("POST", parServer, "", dpopPrivateJWK)
 	if err != nil {
-		return "", fmt.Errorf("failed to create DPoP proof: %v", err)
+		return "", "", "", "", fmt.Errorf("failed to create DPoP proof: %v", err)
 	}
 
 	// Make PAR request
 	d, dpopNonce, err := parRequest(parServer, state, codeChallenge, clientAssertion, dpopProof, clientID, redirectUrl)
 	if err != nil {
-		return "", fmt.Errorf("failed to make PAR request: %v", err)
+		return "", "", "", "", fmt.Errorf("failed to make PAR request: %v", err)
 	}
 
 	if dpopNonce != "" {
 		// Create DPoP proof with nonce
-		dpopProof, err = createDPoPProof("POST", parServer, dpopNonce, dpopPrivateJWK)
+		dpopProof, err = CreateDPoPProof("POST", parServer, dpopNonce, dpopPrivateJWK)
 		if err != nil {
-			return "", fmt.Errorf("failed to create DPoP proof: %v", err)
+			return "", "", "", "", fmt.Errorf("failed to create DPoP proof: %v", err)
 		}
 		d, _, err := parRequest(parServer, state, codeChallenge, clientAssertion, dpopProof, clientID, redirectUrl)
 		if err != nil {
-			return "", fmt.Errorf("failed to make PAR request: %v", err)
+			return "", "", "", "", fmt.Errorf("failed to make PAR request: %v", err)
 		}
-		return d["request_uri"].(string), nil
+		return d["request_uri"].(string), codeVerifier, state, dpopNonce, nil
 	}
 
 	requestUri, ok := d["request_uri"].(string)
 	if !ok {
-		return "", fmt.Errorf("failed to parse request_uri")
+		return "", "", "", "", fmt.Errorf("failed to parse request_uri")
 	}
 
-	return requestUri, nil
+	return requestUri, codeVerifier, state, dpopNonce, nil
 }
