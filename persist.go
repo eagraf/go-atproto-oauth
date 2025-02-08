@@ -9,6 +9,9 @@ type ActiveAuthRequest struct {
 	DPoPPrivateJWK      string `json:"dpop_private_jwk"`
 	DPoPAuthServerNonce string `json:"dpop_authserver_nonce"`
 	State               string `json:"state"`
+	Handle              string `json:"handle"`
+	DID                 string `json:"did"`
+	PDSURL              string `json:"pds_url"`
 }
 
 // Persister saves and retrieves active auth requests.

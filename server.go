@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
+	"path"
+	"strings"
 
 	"github.com/potproject/atproto-oauth2-go-example/key"
-	"github.com/potproject/atproto-oauth2-go-example/par"
-	"github.com/potproject/atproto-oauth2-go-example/resolve"
 )
 
 type Config struct {
@@ -16,11 +17,51 @@ type Config struct {
 	Host      string
 	Port      string
 	SecretJWK string
+	ProxyUrl  string
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Set CORS headers
+		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5002") // Change to match frontend
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Allow-Credentials", "true") // ✅ Allows cookies
+
+		// Handle preflight (OPTIONS) request
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		// Call the next handler
+		next.ServeHTTP(w, r)
+	})
+}
+
+func ProxyRoute(cfg Config, targetURL *url.URL, routePrefix string) http.Handler {
+	return corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Create reverse proxy
+		proxy := &httputil.ReverseProxy{
+			Director: func(req *http.Request) {
+				req.URL.Scheme = targetURL.Scheme
+				req.URL.Host = targetURL.Host
+
+				req.URL.Path = path.Join(targetURL.Path, strings.TrimPrefix(req.URL.Path, routePrefix))
+			},
+		}
+
+		// Forward the request
+		proxy.ServeHTTP(w, r)
+	}))
 }
 
 func EntrypointHandler(cfg Config) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
+
+		// Set a dummy header for sanity check
+		w.Header().Set("X-Dummy", "dummy")
 		// Post DID and submit
 		w.Write([]byte("<html><body>"))
 		w.Write([]byte("<h1>Login</h1>"))
@@ -30,11 +71,11 @@ func EntrypointHandler(cfg Config) http.Handler {
 		w.Write([]byte("<input type=\"submit\" value=\"Submit\">"))
 		w.Write([]byte("</form>"))
 		w.Write([]byte("</body></html>"))
-	})
+	}))
 }
 
 func LoginHandler(cfg Config, persister Persister) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Post Only
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -49,28 +90,28 @@ func LoginHandler(cfg Config, persister Persister) http.Handler {
 		}
 
 		// Resolve handle -> did
-		did, err := resolve.Handle(handle)
+		did, err := getUserHandle(handle)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Not Found: %s", err), http.StatusNotFound)
 			return
 		}
 
 		// Resolve did -> pds
-		pds, err := resolve.PDS(did)
+		pds, err := getPDSURL(did)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Not Found: %s", err), http.StatusNotFound)
 			return
 		}
 
 		// Resolve PDS Auth server
-		authServer, err := resolve.PDSAuthServer(pds)
+		authServer, err := resolvePDSAuthServer(pds)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Not Found: %s", err), http.StatusNotFound)
 			return
 		}
 
 		// resolve PAR(Pushed Authorization Requests) server
-		authServerMeta, err := resolve.FetchAuthServerMeta(authServer)
+		authServerMeta, err := fetchAuthServerMeta(authServer)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Error fetching auth server metadata: %s", err), http.StatusInternalServerError)
 			return
@@ -83,25 +124,23 @@ func LoginHandler(cfg Config, persister Persister) http.Handler {
 		}
 
 		// get Client Metadata
-		clientMetadata := getClientMetadata(cfg.Protocol, cfg.Host, cfg.Port)
+		clientMetadata := getClientMetadata(cfg.Protocol, cfg.Host)
 
 		dpopPrivateJWK := key.GenerateSecretJWK()
 
 		// PAR request
-		requestUri, codeVerifier, state, dpopNonce, err := par.Par(parServer, authServer, cfg.SecretJWK, clientMetadata.ClientID, clientMetadata.RedirectURIs[0], dpopPrivateJWK)
+		authRequest, requestUri, err := Par(parServer, authServer, cfg.SecretJWK, clientMetadata.ClientID, clientMetadata.RedirectURIs[0], dpopPrivateJWK)
 		if err != nil {
-			fmt.Println(err)
 			http.Error(w, fmt.Sprintf("Internal Server Error: %s", err), http.StatusInternalServerError)
 			return
 		}
 
-		err = persister.SaveActiveAuthRequest(state, ActiveAuthRequest{
-			AuthServerIss:       authServer,
-			PKCEVerifier:        codeVerifier,
-			DPoPPrivateJWK:      dpopPrivateJWK,
-			DPoPAuthServerNonce: dpopNonce,
-			State:               state,
-		})
+		// Populate additional fields we want to save with the auth request
+		authRequest.Handle = handle
+		authRequest.DID = did
+		authRequest.PDSURL = pds
+
+		err = persister.SaveActiveAuthRequest(authRequest.State, *authRequest)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Internal Server Error: %s", err), http.StatusInternalServerError)
 			return
@@ -119,14 +158,14 @@ func LoginHandler(cfg Config, persister Persister) http.Handler {
 		data.Set("client_id", clientMetadata.ClientID)
 		data.Set("request_uri", requestUri)
 		http.Redirect(w, r, authServerEndpoint+"?"+data.Encode(), http.StatusFound)
-	})
+	}))
 }
 
 func CallbackHandler(cfg Config, persister Persister) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		// display get parameter
-		iss := r.URL.Query().Get("iss")
+		//iss := r.URL.Query().Get("iss")
 		code := r.URL.Query().Get("code")
 		state := r.URL.Query().Get("state")
 
@@ -142,28 +181,83 @@ func CallbackHandler(cfg Config, persister Persister) http.Handler {
 			return
 		}
 
-		clientMetadata := getClientMetadata(cfg.Protocol, cfg.Host, cfg.Port)
+		clientMetadata := getClientMetadata(cfg.Protocol, cfg.Host)
 		clientID := clientMetadata.ClientID
 
-		tokenBody, nonce, err := initialTokenRequest(authRequest, code, cfg.Protocol+"://"+cfg.Host, clientID, cfg.SecretJWK)
+		tokenBody, err := initialTokenRequest(authRequest, code, cfg.Protocol+"://"+cfg.Host, clientID, cfg.SecretJWK)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Internal Server Error: %s", err), http.StatusInternalServerError)
 			return
 		}
 
-		w.Write([]byte("<html><body>"))
-		w.Write([]byte("<h1>Callback</h1>"))
-		w.Write([]byte("<p>iss: " + iss + "</p>"))
-		w.Write([]byte("<p>code: " + code + "</p>"))
-		w.Write([]byte("<p>state: " + state + "</p>"))
-		w.Write([]byte("<p>token: " + fmt.Sprintf("%+v", tokenBody) + "</p>"))
-		w.Write([]byte("<p>nonce: " + nonce + "</p>"))
-		w.Write([]byte("</body></html>"))
-	})
+		/*if cfg.RedirectUrl == "" {
+			w.Write([]byte("<html><body>"))
+			w.Write([]byte("<h1>Callback</h1>"))
+			w.Write([]byte("<p>iss: " + iss + "</p>"))
+			w.Write([]byte("<p>code: " + code + "</p>"))
+			w.Write([]byte("<p>state: " + state + "</p>"))
+			w.Write([]byte("<p>token: " + fmt.Sprintf("%+v", tokenBody) + "</p>"))
+			w.Write([]byte("</body></html>"))
+			return
+		}*/
+		domain := "beacon.tail07d32.ts.net"
+
+		// Set secure cookies for auth data
+		http.SetCookie(w, &http.Cookie{
+			Name:     "did",
+			Value:    authRequest.DID,
+			Path:     "/",
+			Secure:   true,
+			HttpOnly: false,
+			SameSite: http.SameSiteLaxMode,
+			Domain:   domain,
+		})
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     "handle",
+			Value:    authRequest.Handle,
+			Path:     "/",
+			Secure:   true,
+			HttpOnly: false,
+			SameSite: http.SameSiteLaxMode,
+			Domain:   domain,
+		})
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     "pds_url",
+			Value:    authRequest.PDSURL,
+			Path:     "/",
+			Secure:   true,
+			HttpOnly: false,
+			SameSite: http.SameSiteLaxMode,
+			Domain:   domain,
+		})
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     "access_token",
+			Value:    tokenBody["access_token"].(string),
+			Path:     "/",
+			Secure:   true,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Domain:   domain,
+		})
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     "refresh_token",
+			Value:    tokenBody["refresh_token"].(string),
+			Path:     "/",
+			Secure:   true,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Domain:   domain,
+		})
+		http.Redirect(w, r, "/", http.StatusFound)
+	}))
 }
 
 func JWKSHandler(cfg Config) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		publicJWK, err := key.PrivateJWKtoPublicJWK(cfg.SecretJWK)
 		if err != nil {
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -173,17 +267,17 @@ func JWKSHandler(cfg Config) http.Handler {
 		w.Write([]byte(`{"keys":[`))
 		w.Write([]byte(publicJWK))
 		w.Write([]byte(`]}`))
-	})
+	}))
 }
 
 func ClientMetadataHandler(cfg Config) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		clientMetadata := getClientMetadata(cfg.Protocol, cfg.Host, cfg.Port)
+		clientMetadata := getClientMetadata(cfg.Protocol, cfg.Host)
 		clientMetadataJSON, err := json.Marshal(clientMetadata)
 		if err != nil {
 			http.Error(w, "Not Found", http.StatusNotFound)
 		}
 		w.Write(clientMetadataJSON)
-	})
+	}))
 }

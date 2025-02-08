@@ -1,4 +1,4 @@
-package resolve
+package main
 
 import (
 	"encoding/json"
@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 )
+
+// ATProto specific OAuth logic goes here
 
 func isValidDID(did string) bool {
 	// Basic DID validation - checks if it starts with "did:"
@@ -20,7 +22,7 @@ func isValidHandle(domain string) bool {
 	return match
 }
 
-func Handle(handle string) (string, error) {
+func getUserHandle(handle string) (string, error) {
 	txtRecords, err := net.LookupTXT(fmt.Sprintf("_atproto.%s", handle))
 	if err != nil {
 		return "", fmt.Errorf("DNS lookup failed: %v", err)
@@ -38,7 +40,7 @@ func Handle(handle string) (string, error) {
 	return "", fmt.Errorf("no valid DID found for handle: %s", handle)
 }
 
-func DID(did string) (map[string]interface{}, error) {
+func getDID(did string) (map[string]interface{}, error) {
 	if strings.HasPrefix(did, "did:plc:") {
 		// Handle did:plc resolution
 		resp, err := http.Get(fmt.Sprintf("https://plc.directory/%s", did))
@@ -84,9 +86,9 @@ func DID(did string) (map[string]interface{}, error) {
 	return nil, fmt.Errorf("unsupported DID type: %s", did)
 }
 
-func PDS(did string) (string, error) {
+func getPDSURL(did string) (string, error) {
 	// Resolve the DID document
-	didDoc, err := DID(did)
+	didDoc, err := getDID(did)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve DID document: %v", err)
 	}
@@ -112,51 +114,4 @@ func PDS(did string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no PDS endpoint found in DID document")
-}
-
-func PDSAuthServer(url string) (string, error) {
-	path := "/.well-known/oauth-protected-resource"
-	resp, err := http.Get(url + path)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", err
-	}
-
-	authServers, ok := result["authorization_servers"].([]interface{})
-	if !ok {
-		return "", fmt.Errorf("invalid or missing authorization_servers in PDS metadata")
-	}
-	authServer, ok := authServers[0].(string)
-	if !ok {
-		return "", fmt.Errorf("invalid or missing authorization_servers[0] in PDS metadata")
-	}
-
-	return authServer, nil
-}
-
-// fetchAuthServerMeta does an HTTP GET for Authorization Server (entryway) metadata, verify the contents, and return the metadata as a dict
-func FetchAuthServerMeta(url string) (map[string]interface{}, error) {
-	// TODO assert URL is safe
-	// TODO use a hardened HTTP client
-
-	path := "/.well-known/oauth-authorization-server"
-	resp, err := http.Get(url + path)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-
-	// TODO do some validation on the metadata
-
-	return result, nil
 }

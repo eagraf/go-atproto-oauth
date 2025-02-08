@@ -1,4 +1,4 @@
-package par
+package main
 
 import (
 	"crypto/sha256"
@@ -229,7 +229,7 @@ func parRequest(endpoint string, state string, codeChallenge string, clientAsser
 	return result, "", nil
 }
 
-func Par(parServer string, authServer string, privateJWK string, clientID string, redirectUrl string, dpopPrivateJWK string) (string, string, string, string, error) {
+func Par(parServer string, authServer string, privateJWK string, clientID string, redirectUrl string, dpopPrivateJWK string) (*ActiveAuthRequest, string, error) {
 	state := generateToken()
 	codeVerifier := codeVerifier()
 	codeChallenge := codeChallenge(codeVerifier)
@@ -237,38 +237,51 @@ func Par(parServer string, authServer string, privateJWK string, clientID string
 	// Sign JWT for client authentication
 	clientAssertion, err := SignJWT(privateJWK, authServer, clientID)
 	if err != nil {
-		return "", "", "", "", fmt.Errorf("failed to create client assertion: %v", err)
+		return nil, "", fmt.Errorf("failed to create client assertion: %v", err)
 	}
 
 	// Create DPoP proof
 	dpopProof, err := CreateDPoPProof("POST", parServer, "", dpopPrivateJWK)
 	if err != nil {
-		return "", "", "", "", fmt.Errorf("failed to create DPoP proof: %v", err)
+		return nil, "", fmt.Errorf("failed to create DPoP proof: %v", err)
 	}
 
 	// Make PAR request
 	d, dpopNonce, err := parRequest(parServer, state, codeChallenge, clientAssertion, dpopProof, clientID, redirectUrl)
 	if err != nil {
-		return "", "", "", "", fmt.Errorf("failed to make PAR request: %v", err)
+		return nil, "", fmt.Errorf("failed to make PAR request: %v", err)
 	}
 
 	if dpopNonce != "" {
 		// Create DPoP proof with nonce
 		dpopProof, err = CreateDPoPProof("POST", parServer, dpopNonce, dpopPrivateJWK)
 		if err != nil {
-			return "", "", "", "", fmt.Errorf("failed to create DPoP proof: %v", err)
+			return nil, "", fmt.Errorf("failed to create DPoP proof: %v", err)
 		}
 		d, _, err := parRequest(parServer, state, codeChallenge, clientAssertion, dpopProof, clientID, redirectUrl)
 		if err != nil {
-			return "", "", "", "", fmt.Errorf("failed to make PAR request: %v", err)
+			return nil, "", fmt.Errorf("failed to make PAR request: %v", err)
 		}
-		return d["request_uri"].(string), codeVerifier, state, dpopNonce, nil
+
+		return &ActiveAuthRequest{
+			AuthServerIss:       authServer,
+			PKCEVerifier:        codeVerifier,
+			DPoPPrivateJWK:      dpopPrivateJWK,
+			DPoPAuthServerNonce: dpopNonce,
+			State:               state,
+		}, d["request_uri"].(string), nil
 	}
 
 	requestUri, ok := d["request_uri"].(string)
 	if !ok {
-		return "", "", "", "", fmt.Errorf("failed to parse request_uri")
+		return nil, "", fmt.Errorf("failed to parse request_uri")
 	}
 
-	return requestUri, codeVerifier, state, dpopNonce, nil
+	return &ActiveAuthRequest{
+		AuthServerIss:       authServer,
+		PKCEVerifier:        codeVerifier,
+		DPoPPrivateJWK:      dpopPrivateJWK,
+		DPoPAuthServerNonce: dpopNonce,
+		State:               state,
+	}, requestUri, nil
 }
