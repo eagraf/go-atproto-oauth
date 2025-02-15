@@ -191,7 +191,6 @@ func CallbackHandler(cfg Config, persister Persister) http.Handler {
 			http.Error(w, fmt.Sprintf("Internal Server Error: %s", err), http.StatusInternalServerError)
 			return
 		}
-		fmt.Printf("TOKEN BODY: %+v\n", tokenBody)
 
 		pdsDomain := strings.Replace(authRequest.PDSURL, "https://", "", 1)
 
@@ -209,18 +208,6 @@ func CallbackHandler(cfg Config, persister Persister) http.Handler {
 			return
 		}
 
-		/*if cfg.RedirectUrl == "" {
-			w.Write([]byte("<html><body>"))
-			w.Write([]byte("<h1>Callback</h1>"))
-			w.Write([]byte("<p>iss: " + iss + "</p>"))
-			w.Write([]byte("<p>code: " + code + "</p>"))
-			w.Write([]byte("<p>state: " + state + "</p>"))
-			w.Write([]byte("<p>token: " + fmt.Sprintf("%+v", tokenBody) + "</p>"))
-			w.Write([]byte("</body></html>"))
-			return
-		}*/
-		domain := "beacon.tail07d32.ts.net"
-
 		pdsUrl := authRequest.PDSURL
 		if cfg.BrokerUrl != "" {
 			pdsUrl = cfg.BrokerUrl
@@ -234,7 +221,7 @@ func CallbackHandler(cfg Config, persister Persister) http.Handler {
 			Secure:   true,
 			HttpOnly: false,
 			SameSite: http.SameSiteLaxMode,
-			Domain:   domain,
+			Domain:   cfg.Host,
 		})
 
 		http.SetCookie(w, &http.Cookie{
@@ -244,7 +231,7 @@ func CallbackHandler(cfg Config, persister Persister) http.Handler {
 			Secure:   true,
 			HttpOnly: false,
 			SameSite: http.SameSiteLaxMode,
-			Domain:   domain,
+			Domain:   cfg.Host,
 		})
 
 		http.SetCookie(w, &http.Cookie{
@@ -254,7 +241,7 @@ func CallbackHandler(cfg Config, persister Persister) http.Handler {
 			Secure:   true,
 			HttpOnly: false,
 			SameSite: http.SameSiteLaxMode,
-			Domain:   domain,
+			Domain:   cfg.Host,
 		})
 
 		http.SetCookie(w, &http.Cookie{
@@ -264,7 +251,7 @@ func CallbackHandler(cfg Config, persister Persister) http.Handler {
 			Secure:   true,
 			HttpOnly: true,
 			SameSite: http.SameSiteLaxMode,
-			Domain:   domain,
+			Domain:   cfg.Host,
 		})
 		http.Redirect(w, r, "/", http.StatusFound)
 	}))
