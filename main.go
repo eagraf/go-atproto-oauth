@@ -21,6 +21,8 @@ func main() {
 	port := os.Getenv("PORT")
 	secretJWK := os.Getenv("SECRET_JWK")
 	proxyUrl := os.Getenv("PROXY_URL")
+	pdsUrl := os.Getenv("PDS_URL")
+	brokerUrl := os.Getenv("BROKER_URL")
 
 	inMemoryPersister := NewInMemoryPersister()
 
@@ -30,6 +32,8 @@ func main() {
 		Port:      port,
 		SecretJWK: secretJWK,
 		ProxyUrl:  proxyUrl,
+		PDSURL:    pdsUrl,
+		BrokerUrl: brokerUrl,
 	}
 
 	// Register handlers
@@ -53,6 +57,10 @@ func main() {
 
 	http.HandleFunc("/backend/{rest...}", ProxyRoute(cfg, backendUrl, "/backend").ServeHTTP)
 	http.HandleFunc("/{rest...}", ProxyRoute(cfg, frontendUrl, "").ServeHTTP)
+
+	// Set up a broker for xrpc endpoints
+	broker := NewTokenBroker(inMemoryPersister, cfg.SecretJWK, cfg.SecretJWK, cfg.Host)
+	http.HandleFunc("/xrpc/{rest...}", broker.Endpoint())
 
 	http.ListenAndServe(":"+port, nil)
 }

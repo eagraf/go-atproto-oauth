@@ -18,6 +18,8 @@ type Config struct {
 	Port      string
 	SecretJWK string
 	ProxyUrl  string
+	PDSURL    string
+	BrokerUrl string
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
@@ -189,6 +191,23 @@ func CallbackHandler(cfg Config, persister Persister) http.Handler {
 			http.Error(w, fmt.Sprintf("Internal Server Error: %s", err), http.StatusInternalServerError)
 			return
 		}
+		fmt.Printf("TOKEN BODY: %+v\n", tokenBody)
+
+		pdsDomain := strings.Replace(authRequest.PDSURL, "https://", "", 1)
+
+		session := Session{
+			AccessToken:  tokenBody["access_token"].(string),
+			RefreshToken: tokenBody["refresh_token"].(string),
+			State:        state,
+			Handle:       authRequest.Handle,
+			DID:          authRequest.DID,
+			PDSDomain:    pdsDomain,
+		}
+		err = persister.SaveSession(state, session)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Internal Server Error: %s", err), http.StatusInternalServerError)
+			return
+		}
 
 		/*if cfg.RedirectUrl == "" {
 			w.Write([]byte("<html><body>"))
@@ -201,6 +220,11 @@ func CallbackHandler(cfg Config, persister Persister) http.Handler {
 			return
 		}*/
 		domain := "beacon.tail07d32.ts.net"
+
+		pdsUrl := authRequest.PDSURL
+		if cfg.BrokerUrl != "" {
+			pdsUrl = cfg.BrokerUrl
+		}
 
 		// Set secure cookies for auth data
 		http.SetCookie(w, &http.Cookie{
@@ -225,7 +249,7 @@ func CallbackHandler(cfg Config, persister Persister) http.Handler {
 
 		http.SetCookie(w, &http.Cookie{
 			Name:     "pds_url",
-			Value:    authRequest.PDSURL,
+			Value:    pdsUrl,
 			Path:     "/",
 			Secure:   true,
 			HttpOnly: false,
@@ -234,18 +258,8 @@ func CallbackHandler(cfg Config, persister Persister) http.Handler {
 		})
 
 		http.SetCookie(w, &http.Cookie{
-			Name:     "access_token",
-			Value:    tokenBody["access_token"].(string),
-			Path:     "/",
-			Secure:   true,
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-			Domain:   domain,
-		})
-
-		http.SetCookie(w, &http.Cookie{
-			Name:     "refresh_token",
-			Value:    tokenBody["refresh_token"].(string),
+			Name:     "state",
+			Value:    state,
 			Path:     "/",
 			Secure:   true,
 			HttpOnly: true,
