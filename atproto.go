@@ -86,7 +86,17 @@ func getDID(did string) (map[string]interface{}, error) {
 	return nil, fmt.Errorf("unsupported DID type: %s", did)
 }
 
-func getPDSURL(did string) (string, error) {
+func getPDSURL(handle string, cfg Config) (string, error) {
+	if cfg.PDSURL != "" {
+		return cfg.PDSURL, nil
+	}
+
+	// Resolve handle -> did
+	did, err := getUserHandle(handle)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve DID: %v", err)
+	}
+
 	// Resolve the DID document
 	didDoc, err := getDID(did)
 	if err != nil {

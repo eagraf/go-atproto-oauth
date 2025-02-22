@@ -91,15 +91,8 @@ func LoginHandler(cfg Config, persister Persister) http.Handler {
 			return
 		}
 
-		// Resolve handle -> did
-		did, err := getUserHandle(handle)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Not Found: %s", err), http.StatusNotFound)
-			return
-		}
-
 		// Resolve did -> pds
-		pds, err := getPDSURL(did)
+		pds, err := getPDSURL(handle, cfg)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Not Found: %s", err), http.StatusNotFound)
 			return
@@ -139,7 +132,7 @@ func LoginHandler(cfg Config, persister Persister) http.Handler {
 
 		// Populate additional fields we want to save with the auth request
 		authRequest.Handle = handle
-		authRequest.DID = did
+		//authRequest.DID = did
 		authRequest.PDSURL = pds
 
 		err = persister.SaveActiveAuthRequest(authRequest.State, *authRequest)

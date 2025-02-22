@@ -31,8 +31,6 @@ func NewTokenBroker(persister Persister, dpopPrivateKey string, dpopPublicJWK st
 
 func (b *TokenBroker) Endpoint() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("Broker endpoint hit")
-
 		err := b.wrapRequest(r)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
