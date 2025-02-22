@@ -1,8 +1,10 @@
-# AT Protocol OAuth2 Go Example
+# Go ATProto OAuth2
 
 This is a example project showing how to implement an Golang web service which uses atproto OAuth for authentication.
 
 [python-oauth-web-app](https://github.com/bluesky-social/cookbook/tree/main/python-oauth-web-app) is used as a reference for the implementation.
+
+Forked from [atproto-oauth2-go-example](https://github.com/potproject/atproto-oauth2-go-example)
 
 ## Docs
 
@@ -46,7 +48,7 @@ SECRET_JWK='...'       # The Secret JWK generated in step 3
 
 Start the server:
 ```bash
-go run main.go
+go run cmd/main.go
 # However, you need a site that is actually published with https
 ```
 

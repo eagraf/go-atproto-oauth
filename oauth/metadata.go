@@ -1,4 +1,4 @@
-package main
+package oauth
 
 type ClientMetadata struct {
 	ClientID                    string   `json:"client_id"`                                 // required
