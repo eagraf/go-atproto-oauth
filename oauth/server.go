@@ -272,3 +272,53 @@ func ClientMetadataHandler(cfg Config) http.Handler {
 		w.Write(clientMetadataJSON)
 	}))
 }
+
+func LogoutHandler(cfg Config, persister Persister) http.Handler {
+	return corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		persister.DeleteSession(r.URL.Query().Get("state"))
+
+		// Unset all the cookies we previously set
+		http.SetCookie(w, &http.Cookie{
+			Name:     "did",
+			Value:    "",
+			Path:     "/",
+			Secure:   true,
+			HttpOnly: false,
+			SameSite: http.SameSiteLaxMode,
+			Domain:   cfg.Host,
+			MaxAge:   -1,
+		})
+		http.SetCookie(w, &http.Cookie{
+			Name:     "handle",
+			Value:    "",
+			Path:     "/",
+			Secure:   true,
+			HttpOnly: false,
+			SameSite: http.SameSiteLaxMode,
+			Domain:   cfg.Host,
+			MaxAge:   -1,
+		})
+		http.SetCookie(w, &http.Cookie{
+			Name:     "pds_url",
+			Value:    "",
+			Path:     "/",
+			Secure:   true,
+			HttpOnly: false,
+			SameSite: http.SameSiteLaxMode,
+			Domain:   cfg.Host,
+			MaxAge:   -1,
+		})
+		http.SetCookie(w, &http.Cookie{
+			Name:     "state",
+			Value:    "",
+			Path:     "/",
+			Secure:   true,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Domain:   cfg.Host,
+			MaxAge:   -1,
+		})
+
+		http.Redirect(w, r, "/", http.StatusFound)
+	}))
+}
