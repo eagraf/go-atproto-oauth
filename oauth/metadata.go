@@ -21,19 +21,19 @@ type ClientMetadata struct {
 	PolicyURI  string `json:"policy_uri,omitempty"`  // optional
 }
 
-func getClientMetadata(protocol string, host string) ClientMetadata {
+func getClientMetadata(protocol string, apiEndpointPath string) ClientMetadata {
 	return ClientMetadata{
 		ClientName:                  "Demo Client",
-		ClientURI:                   protocol + "://" + host,
-		ClientID:                    protocol + "://" + host + "/client_metadata.json", // TODO handle localhost for development mode
+		ClientURI:                   protocol + "://" + apiEndpointPath,
+		ClientID:                    protocol + "://" + apiEndpointPath + "/client_metadata.json", // TODO handle localhost for development mode
 		ApplicationType:             "web",
 		GrantTypes:                  []string{"authorization_code", "refresh_token"},
 		Scope:                       "atproto transition:generic",
 		ResponseTypes:               []string{"code"},
-		RedirectURIs:                []string{protocol + "://" + host + "/callback"},
+		RedirectURIs:                []string{protocol + "://" + apiEndpointPath + "/callback"},
 		DPopBoundAccessTokens:       true,
 		TokenEndpointAuthMethod:     "private_key_jwt",
 		TokenEndpointAuthSigningAlg: "ES256",
-		JwksUri:                     protocol + "://" + host + "/jwks.json",
+		JwksUri:                     protocol + "://" + apiEndpointPath + "/jwks.json",
 	}
 }

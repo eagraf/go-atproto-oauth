@@ -13,13 +13,12 @@ import (
 )
 
 type Config struct {
-	Protocol  string
-	Host      string
-	Port      string
-	SecretJWK string
-	ProxyUrl  string
-	PDSURL    string
-	BrokerUrl string
+	Protocol     string
+	Host         string
+	SecretJWK    string
+	PDSURL       string
+	BrokerUrl    string
+	EndpointPath string
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
@@ -62,8 +61,6 @@ func EntrypointHandler(cfg Config) http.Handler {
 	return corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 
-		// Set a dummy header for sanity check
-		w.Header().Set("X-Dummy", "dummy")
 		// Post DID and submit
 		w.Write([]byte("<html><body>"))
 		w.Write([]byte("<h1>Login</h1>"))
@@ -119,7 +116,7 @@ func LoginHandler(cfg Config, persister Persister) http.Handler {
 		}
 
 		// get Client Metadata
-		clientMetadata := getClientMetadata(cfg.Protocol, cfg.Host)
+		clientMetadata := getClientMetadata(cfg.Protocol, path.Join(cfg.Host, cfg.EndpointPath))
 
 		dpopPrivateJWK := key.GenerateSecretJWK()
 
@@ -176,10 +173,10 @@ func CallbackHandler(cfg Config, persister Persister) http.Handler {
 			return
 		}
 
-		clientMetadata := getClientMetadata(cfg.Protocol, cfg.Host)
+		clientMetadata := getClientMetadata(cfg.Protocol, path.Join(cfg.Host, cfg.EndpointPath))
 		clientID := clientMetadata.ClientID
 
-		tokenBody, err := initialTokenRequest(authRequest, code, cfg.Protocol+"://"+cfg.Host, clientID, cfg.SecretJWK)
+		tokenBody, err := initialTokenRequest(authRequest, code, cfg.Protocol+"://"+path.Join(cfg.Host, cfg.EndpointPath), clientID, cfg.SecretJWK)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Internal Server Error: %s", err), http.StatusInternalServerError)
 			return
@@ -267,7 +264,7 @@ func JWKSHandler(cfg Config) http.Handler {
 func ClientMetadataHandler(cfg Config) http.Handler {
 	return corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		clientMetadata := getClientMetadata(cfg.Protocol, cfg.Host)
+		clientMetadata := getClientMetadata(cfg.Protocol, path.Join(cfg.Host, cfg.EndpointPath))
 		clientMetadataJSON, err := json.Marshal(clientMetadata)
 		if err != nil {
 			http.Error(w, "Not Found", http.StatusNotFound)

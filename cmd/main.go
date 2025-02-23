@@ -30,9 +30,7 @@ func main() {
 	cfg := oauth.Config{
 		Protocol:  protocol,
 		Host:      host,
-		Port:      port,
 		SecretJWK: secretJWK,
-		ProxyUrl:  proxyUrl,
 		PDSURL:    pdsUrl,
 		BrokerUrl: brokerUrl,
 	}
@@ -46,7 +44,7 @@ func main() {
 
 	// Reverse proxy
 
-	frontendUrl, err := url.Parse(cfg.ProxyUrl)
+	frontendUrl, err := url.Parse(proxyUrl)
 	if err != nil {
 		log.Fatal("Invalid redirect URL")
 	}
