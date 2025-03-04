@@ -22,7 +22,7 @@ func isValidHandle(domain string) bool {
 	return match
 }
 
-func getUserHandle(handle string) (string, error) {
+func getDIDFromDNS(handle string) (string, error) {
 	txtRecords, err := net.LookupTXT(fmt.Sprintf("_atproto.%s", handle))
 	if err != nil {
 		return "", fmt.Errorf("DNS lookup failed: %v", err)
@@ -38,6 +38,32 @@ func getUserHandle(handle string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no valid DID found for handle: %s", handle)
+}
+
+func getDIDFromPDS(pdsURL string, handle string) (string, error) {
+	url := fmt.Sprintf("%s/%s?handle=%s", pdsURL, "xrpc/com.atproto.identity.resolveHandle", handle)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to resolve handle: %s, status: %d", handle, resp.StatusCode)
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+
+	return result["did"].(string), nil
 }
 
 func getDID(did string) (map[string]interface{}, error) {
@@ -86,27 +112,32 @@ func getDID(did string) (map[string]interface{}, error) {
 	return nil, fmt.Errorf("unsupported DID type: %s", did)
 }
 
-func getPDSURL(handle string, cfg Config) (string, error) {
+func getPDSURL(handle string, cfg Config) (string, string, error) {
 	if cfg.PDSURL != "" {
-		return cfg.PDSURL, nil
+		did, err := getDIDFromPDS(cfg.PDSURL, handle)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to resolve DID: %v", err)
+		}
+
+		return cfg.PDSURL, did, nil
 	}
 
 	// Resolve handle -> did
-	did, err := getUserHandle(handle)
+	did, err := getDIDFromDNS(handle)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve DID: %v", err)
+		return "", "", fmt.Errorf("failed to resolve DID: %v", err)
 	}
 
 	// Resolve the DID document
 	didDoc, err := getDID(did)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve DID document: %v", err)
+		return "", "", fmt.Errorf("failed to resolve DID document: %v", err)
 	}
 
 	// Extract service endpoint from DID document
 	services, ok := didDoc["service"].([]interface{})
 	if !ok {
-		return "", fmt.Errorf("invalid or missing service in DID document")
+		return "", "", fmt.Errorf("invalid or missing service in DID document")
 	}
 
 	for _, service := range services {
@@ -118,10 +149,10 @@ func getPDSURL(handle string, cfg Config) (string, error) {
 		// Look for the atproto PDS service
 		if svc["type"] == "AtprotoPersonalDataServer" {
 			if endpoint, ok := svc["serviceEndpoint"].(string); ok {
-				return endpoint, nil
+				return endpoint, did, nil
 			}
 		}
 	}
 
-	return "", fmt.Errorf("no PDS endpoint found in DID document")
+	return "", "", fmt.Errorf("no PDS endpoint found in DID document")
 }
