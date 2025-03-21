@@ -48,7 +48,7 @@ func initialTokenRequest(authRequest ActiveAuthRequest, code, appURL, clientID s
 		return nil, fmt.Errorf("unsafe token URL: %s", tokenURL)
 	}
 
-	dpopProof, err := CreateDPoPProof("POST", tokenURL, authRequest.DPoPAuthServerNonce, authRequest.DPoPPrivateJWK)
+	dpopProof, err := CreateDPoPProof("POST", tokenURL, authRequest.DPoPAuthServerNonce, authRequest.DPoPPrivateJWK, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DPoP proof: %w", err)
 	}
@@ -85,7 +85,7 @@ func initialTokenRequest(authRequest ActiveAuthRequest, code, appURL, clientID s
 		if respBody["error"] == "use_dpop_nonce" {
 			newNonce := resp.Header.Get("DPoP-Nonce")
 
-			dpopProof, err = CreateDPoPProof("POST", tokenURL, newNonce, authRequest.DPoPPrivateJWK)
+			dpopProof, err = CreateDPoPProof("POST", tokenURL, newNonce, authRequest.DPoPPrivateJWK, "")
 			if err != nil {
 				return nil, fmt.Errorf("failed to create new DPoP proof: %w", err)
 			}

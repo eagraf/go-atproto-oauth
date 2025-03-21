@@ -15,13 +15,14 @@ type ActiveAuthRequest struct {
 }
 
 type Session struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	State        string `json:"state"`
-	Handle       string `json:"handle"`
-	DID          string `json:"did"`
-	PDSDomain    string `json:"pds_domain"`
-	Expiry       int64  `json:"expiry"`
+	AccessToken    string `json:"access_token"`
+	RefreshToken   string `json:"refresh_token"`
+	State          string `json:"state"`
+	Handle         string `json:"handle"`
+	DID            string `json:"did"`
+	PDSDomain      string `json:"pds_domain"`
+	Expiry         int64  `json:"expiry"`
+	DPoPPrivateJWK string `json:"dpop_private_jwk"`
 }
 
 // Persister saves and retrieves active auth requests.

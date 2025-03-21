@@ -58,6 +58,7 @@ type DPoPClaims struct {
 	Iat   int64  `json:"iat"`
 	Exp   int64  `json:"exp"`
 	Nonce string `json:"nonce"`
+	Ath   string `json:"ath"`
 }
 
 func SignJWT(privateJWK string, authServer string, clientID string) (string, error) {
@@ -111,7 +112,14 @@ func SignJWT(privateJWK string, authServer string, clientID string) (string, err
 	return token, nil
 }
 
-func CreateDPoPProof(method string, url string, nonce string, privateJWK string) (string, error) {
+func createS256CodeChallenge(codeVerifier string) string {
+	h := sha256.New()
+	h.Write([]byte(codeVerifier))
+	hash := h.Sum(nil)
+	return base64.RawURLEncoding.EncodeToString(hash)
+}
+
+func CreateDPoPProof(method string, htu string, nonce string, privateJWK string, accessToken string) (string, error) {
 	var jwk jose.JSONWebKey
 	err := json.Unmarshal([]byte(privateJWK), &jwk)
 	if err != nil {
@@ -144,10 +152,16 @@ func CreateDPoPProof(method string, url string, nonce string, privateJWK string)
 	claims := DPoPClaims{
 		Jti:   generateToken(),
 		Htm:   method,
-		Htu:   url,
+		Htu:   htu,
 		Iat:   now.Unix(),
 		Exp:   now.Add(30 * time.Second).Unix(),
 		Nonce: nonce,
+	}
+
+	// If an access token is provided, add a b64 of the sha256 hash f the access token to the ath claim
+	if accessToken != "" {
+		challenge := createS256CodeChallenge(accessToken)
+		claims.Ath = challenge
 	}
 
 	claimsJSON, err := json.Marshal(claims)
@@ -241,7 +255,7 @@ func Par(parServer string, authServer string, privateJWK string, clientID string
 	}
 
 	// Create DPoP proof
-	dpopProof, err := CreateDPoPProof("POST", parServer, "", dpopPrivateJWK)
+	dpopProof, err := CreateDPoPProof("POST", parServer, "", dpopPrivateJWK, "")
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to create DPoP proof: %v", err)
 	}
@@ -254,7 +268,7 @@ func Par(parServer string, authServer string, privateJWK string, clientID string
 
 	if dpopNonce != "" {
 		// Create DPoP proof with nonce
-		dpopProof, err = CreateDPoPProof("POST", parServer, dpopNonce, dpopPrivateJWK)
+		dpopProof, err = CreateDPoPProof("POST", parServer, dpopNonce, dpopPrivateJWK, "")
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to create DPoP proof: %v", err)
 		}

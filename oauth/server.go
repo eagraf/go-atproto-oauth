@@ -182,15 +182,16 @@ func CallbackHandler(cfg Config, persister Persister) http.Handler {
 			return
 		}
 
-		pdsDomain := strings.Replace(authRequest.PDSURL, "https://", "", 1)
+		pdsDomain := strings.Replace(strings.Replace(authRequest.PDSURL, "https://", "", 1), "http://", "", 1)
 
 		session := Session{
-			AccessToken:  tokenBody["access_token"].(string),
-			RefreshToken: tokenBody["refresh_token"].(string),
-			State:        state,
-			Handle:       authRequest.Handle,
-			DID:          authRequest.DID,
-			PDSDomain:    pdsDomain,
+			AccessToken:    tokenBody["access_token"].(string),
+			RefreshToken:   tokenBody["refresh_token"].(string),
+			State:          state,
+			Handle:         authRequest.Handle,
+			DID:            authRequest.DID,
+			PDSDomain:      pdsDomain,
+			DPoPPrivateJWK: authRequest.DPoPPrivateJWK,
 		}
 		err = persister.SaveSession(state, session)
 		if err != nil {

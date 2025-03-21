@@ -6,56 +6,55 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 )
 
 // TokenBroker handles attaching OAuth tokens and DPoP proofs to requests
 type TokenBroker struct {
 	persister Persister
-
 	// JWK private key
-	dpopPrivateKey string
-	dpopPublicJWK  string
-	dpopNonce      string
-	issuer         string
+	issuer string
+	// The URL habitat actually internally proxies to.
+	internalURL string
+	// Used to match the htu claim on the PDS Oauth server
+	externalURL string
 }
 
 // NewTokenBroker creates a new token broker instance
-func NewTokenBroker(persister Persister, dpopPrivateKey string, dpopPublicJWK string, issuer string) *TokenBroker {
+func NewTokenBroker(persister Persister, issuer string, internalURL string, externalURL string) *TokenBroker {
 	return &TokenBroker{
-		persister:      persister,
-		dpopPrivateKey: dpopPrivateKey,
-		dpopPublicJWK:  dpopPublicJWK,
-		issuer:         issuer,
+		persister:   persister,
+		issuer:      issuer,
+		internalURL: internalURL,
+		externalURL: externalURL,
 	}
 }
 
 func (b *TokenBroker) Endpoint() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		err := b.wrapRequest(r)
+
+		resp, err := b.dpopRequest(r)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		resp, err := b.forwardRequest(r)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		// Copy response headers before writing status code
+		for k, vv := range resp.Header {
+			for _, v := range vv {
+				w.Header().Add(k, v)
+			}
 		}
+		w.WriteHeader(resp.StatusCode)
 
+		// Write body last
 		defer resp.Body.Close()
 		io.Copy(w, resp.Body)
-
-		for k, v := range resp.Header {
-			w.Header().Set(k, v[0])
-		}
-
-		w.WriteHeader(resp.StatusCode)
 	}
 }
 
 // WrapRequest wraps an HTTP request with OAuth token and DPoP proof
-func (b *TokenBroker) wrapRequest(req *http.Request) error {
+func (b *TokenBroker) wrapRequest(req *http.Request, dpopNonce string) error {
 	// Clear out request uri
 	// https://stackoverflow.com/questions/19595860/http-request-requesturi-field-when-making-request-in-go
 	req.RequestURI = ""
@@ -74,11 +73,23 @@ func (b *TokenBroker) wrapRequest(req *http.Request) error {
 	}
 
 	// Use session to build request url
-	req.URL.Scheme = "https"
-	req.URL.Host = session.PDSDomain
+	newURL, err := url.Parse(b.internalURL)
+	if err != nil {
+		return fmt.Errorf("error parsing base URL: %w", err)
+	}
+	req.URL.Host = newURL.Host
+	req.URL.Scheme = newURL.Scheme
+
+	// Note: the htu claim must match the URL of the OAuth server we are hitting.
+	// Use the external URL, because the internal URL may not match when there is a proxy in between.
+	htu, err := url.Parse(b.externalURL)
+	if err != nil {
+		return fmt.Errorf("error parsing external URL: %w", err)
+	}
+	htu.Path = req.URL.Path
 
 	// Generate DPoP proof
-	dpopProof, err := CreateDPoPProof(req.Method, req.URL.String(), b.dpopNonce, b.dpopPrivateKey)
+	dpopProof, err := CreateDPoPProof(req.Method, htu.String(), dpopNonce, session.DPoPPrivateJWK, session.AccessToken)
 	if err != nil {
 		return fmt.Errorf("error creating DPoP proof: %w", err)
 	}
@@ -91,22 +102,14 @@ func (b *TokenBroker) wrapRequest(req *http.Request) error {
 }
 
 // Do performs an HTTP request with OAuth token and DPoP proof
-func (b *TokenBroker) forwardRequest(req *http.Request) (*http.Response, error) {
-	// Clone request body if present
-	var bodyBytes []byte
+func (b *TokenBroker) dpopRequest(req *http.Request) (*http.Response, error) {
+	bodyBytes := []byte{}
 	if req.Body != nil {
 		bodyBytes, _ = io.ReadAll(req.Body)
 		req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 	}
 
-	err := b.wrapRequest(req)
-	if err != nil {
-		return nil, err
-	}
-
-	// Make request
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := b.forwardRequest(req, bodyBytes, "")
 	if err != nil {
 		return nil, err
 	}
@@ -123,20 +126,28 @@ func (b *TokenBroker) forwardRequest(req *http.Request) (*http.Response, error) 
 
 		if errorResp.Error == "use_dpop_nonce" {
 			// Update nonce and retry
-			b.dpopNonce = resp.Header.Get("DPoP-Nonce")
+			dpopNonce := resp.Header.Get("DPoP-Nonce")
 
-			// Recreate request with original body
-			if bodyBytes != nil {
-				req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-			}
-
-			err = b.wrapRequest(req)
-			if err != nil {
-				return nil, err
-			}
-
-			return b.forwardRequest(req)
+			return b.forwardRequest(req, bodyBytes, dpopNonce)
 		}
+	}
+
+	return resp, nil
+}
+
+func (b *TokenBroker) forwardRequest(req *http.Request, bodyBytes []byte, dpopNonce string) (*http.Response, error) {
+	req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+	err := b.wrapRequest(req, dpopNonce)
+	if err != nil {
+		return nil, err
+	}
+
+	// Make request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
 	}
 
 	return resp, nil
